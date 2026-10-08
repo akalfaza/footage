@@ -139,16 +139,27 @@ function setupShutter() {
   button.addEventListener("pointercancel", shutterCancel);
   button.addEventListener("lostpointercapture", shutterCancel);
   button.addEventListener("contextmenu", event => event.preventDefault());
-  // Pointer events own physical gestures. Only synthetic/keyboard clicks use click.
-  button.addEventListener("click", event => {
+  // First activation uses click: touch pointerdown does not grant Safari user
+  // activation. Call setup synchronously here, before any await or animation.
+  button.addEventListener("click", shutterClick);
+  window.addEventListener("blur", pauseDrawing);
+  updateDrawControl();
+}
+
+function shutterClick(event) {
     event.preventDefault();
-    if (infoOpen || event.detail !== 0 || activePointer !== null) return;
+    if (infoOpen || window.footageMobile === false) return;
+    if (!orientationListening) {
+      setStatus("Preparing camera and motion. Tap again when ready.");
+      ensureTracking();
+      return; // This setup gesture must never capture or start a hold.
+    }
+    // Physical gestures are already handled by pointer events. Keep keyboard /
+    // assistive activation available without duplicating a pointer capture.
+    if (event.detail !== 0 || activePointer !== null) return;
     if (shutterState === "LOCKED") pauseDrawing();
     else if (canStamp()) stampCurrentFragment();
     else { ensureTracking(); setStatus("Preparing camera and motion. Tap again when ready."); }
-  });
-  window.addEventListener("blur", pauseDrawing);
-  updateDrawControl();
 }
 
 function setShutterState(state) {
@@ -159,6 +170,9 @@ function setShutterState(state) {
 
 function shutterDown(event) {
   if (infoOpen || event.isPrimary === false || event.button !== 0 || activePointer !== null) return;
+  // Leave the first tap's native click intact. No permission request, capture,
+  // pointer capture, or drawing state change may happen on setup touch-down.
+  if (!orientationListening) return;
   event.preventDefault();
   if (shutterState === "LOCKED") { pauseDrawing(); return; }
   if (!canStamp()) {
@@ -201,6 +215,7 @@ function shutterUp(event) { finishPointer(event); }
 function shutterCancel(event) { finishPointer(event); }
 
 function ensureTracking() {
+  if (window.footageMobile === false) return Promise.resolve();
   if (orientationListening) {
     if (!video) startCamera();
     return Promise.resolve();
@@ -219,7 +234,7 @@ async function initializeTracking() {
       ? window.DeviceOrientationEvent.requestPermission() : Promise.resolve("granted");
     const motionPermission = requestSizingPermission();
     const [permission, sizingPermission] = await Promise.all([orientationPermission, motionPermission]);
-    if (permission !== "granted") throw new Error("Motion access denied. Allow motion in website settings, then tap the shutter.");
+    if (permission !== "granted") throw new Error("FOOTAGE needs motion access to draw. Allow motion access in Safari website settings, then tap the shutter again.");
     window.addEventListener("deviceorientation", handleOrientation);
     orientationListening = true;
     if (sizingPermission === "granted") {
@@ -234,7 +249,9 @@ async function initializeTracking() {
     }, 5000);
   } catch (error) {
     pauseDrawing();
-    setStatus(error.message);
+    setStatus(error.name === "NotAllowedError"
+      ? "FOOTAGE needs motion access. Tap the shutter to allow access, or check Safari website settings."
+      : error.message);
   }
 }
 

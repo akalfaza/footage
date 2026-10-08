@@ -373,3 +373,55 @@ test('intro fades only on first successful stamp and stays hidden after clear', 
   s.resetCanvas(); s.shutterDown(event()); s.shutterUp(event());
   assert.equal(fades, 1);
 });
+
+test('first touch waits for click; both permission requests start synchronously, once', async () => {
+  let activated = false, orientationCalls = 0, motionCalls = 0;
+  let grant;
+  const permission = new Promise(resolve => { grant = resolve; });
+  const s = sketch(() => { assert.equal(activated, true); orientationCalls++; return permission; });
+  s.window.DeviceMotionEvent = { requestPermission() {
+    assert.equal(activated, true); motionCalls++; return permission;
+  } };
+  const down = {pointerId: 1, button: 0, pointerType: 'touch', isPrimary: true,
+    preventDefault() { assert.fail('setup touch-down must preserve native click'); }};
+  s.shutterDown(down);
+  assert.equal(orientationCalls, 0);
+  assert.equal(s.read('shutterState'), 'IDLE');
+  activated = true;
+  s.shutterClick({detail: 1, preventDefault() {}});
+  assert.equal(orientationCalls, 1); assert.equal(motionCalls, 1);
+  const pending = s.read('trackingRequest');
+  s.shutterClick({detail: 1, preventDefault() {}});
+  assert.equal(orientationCalls, 1); assert.equal(motionCalls, 1);
+  activated = false; grant('granted'); await pending;
+  assert.equal(s.read('orientationListening'), true);
+  assert.equal(s.read('isDrawing'), false);
+  s.shutterClick({detail: 1, preventDefault() {}});
+  s.pauseDrawing(); await s.ensureTracking();
+  assert.equal(orientationCalls, 1); assert.equal(motionCalls, 1);
+});
+
+test('denial stays idle with an actionable message; fresh page waits for another gesture', async () => {
+  const denied = sketch(async () => 'denied');
+  denied.shutterClick({detail: 1, preventDefault() {}});
+  await denied.read('trackingRequest');
+  assert.equal(denied.read('orientationListening'), false);
+  assert.equal(denied.read('isDrawing'), false);
+  assert.match(denied.elements.status.textContent, /FOOTAGE needs motion access/);
+  for (const permission of ['granted', 'denied']) {
+    let calls = 0;
+    const fresh = sketch(async () => { calls++; return permission; });
+    assert.equal(calls, 0); // reload / a new browser session has no automatic request
+    fresh.shutterClick({detail: 1, preventDefault() {}});
+    await fresh.read('trackingRequest');
+    assert.equal(calls, 1); assert.equal(fresh.read('isDrawing'), false);
+  }
+});
+
+test('desktop cannot request permissions even if setup is called directly', async () => {
+  const s = sketch(() => { assert.fail('desktop requested orientation'); });
+  s.window.footageMobile = false;
+  s.shutterClick({detail: 1, preventDefault() {}});
+  await s.ensureTracking();
+  assert.equal(s.read('orientationListening'), false);
+});

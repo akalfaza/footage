@@ -3,20 +3,44 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#141414" />
+  <meta name="theme-color" content="#000000" />
   <title>Footage</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Intel+One+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=block" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.js"></script>
   <link rel="stylesheet" href="style.css" />
   <script src="mySketch2.js" defer></script>
 </head>
 <body>
   <main id="canvas-host" aria-label="Footage camera canvas"></main>
-  <header>FOOTAGE</header>
-  <p id="status" role="status">Tap DRAW to start your camera.</p>
-  <nav aria-label="Canvas controls">
-    <button id="draw-toggle" type="button" aria-pressed="false">DRAW</button>
-    <button id="clear" type="button">CLEAR / RESTART</button>
-    <button id="save" type="button">SAVE IMAGE</button>
+  <header>
+    <h1>FOOTAGE</h1>
+    <button id="info-open" class="icon-button" type="button" aria-label="About Footage" aria-controls="info-panel" aria-expanded="false"><span class="material-symbols-outlined" aria-hidden="true">help</span></button>
+    <p id="intro">Press the shutter to start drawing!</p>
+    <p id="status" role="status"></p>
+  </header>
+  <nav id="camera-controls" aria-label="Canvas controls">
+    <button id="save" class="icon-button" type="button" aria-label="Save image"><span class="material-symbols-outlined" aria-hidden="true">download</span></button>
+    <div class="shutter-group">
+      <div id="lock-indicator" data-state="IDLE" aria-hidden="true"><span id="lock-icon" class="material-symbols-outlined">lock_open</span><span id="lock-caption">Slide up to lock</span></div>
+      <button id="shutter" type="button" data-state="IDLE" aria-pressed="false" aria-label="Capture fragment; hold to draw, slide up to lock"><span class="shutter-core"></span></button>
+      <span id="shutter-label" class="sr-only"></span>
+    </div>
+    <button id="clear" class="icon-button" type="button" aria-label="Clear canvas"><span class="material-symbols-outlined" aria-hidden="true">delete</span></button>
   </nav>
+  <section id="info-panel" role="dialog" aria-modal="true" aria-label="About Footage" hidden>
+    <button id="info-close" class="icon-button" type="button" aria-label="Close information"><span class="material-symbols-outlined" aria-hidden="true">close</span></button>
+    <div class="info-scroll">
+      <div class="info-copy">
+        <p>FOOTAGE turns your camera into a brush and your movement into an image.</p>
+        <p>Point your phone to draw across the canvas. Tilt it to rotate the fragments. Move slowly for larger fragments, or faster for smaller ones.</p>
+        <p>Tap the shutter to capture a single fragment. Hold to draw continuously, or slide up to lock for hands-free drawing.</p>
+        <p>Save your composition whenever you're ready.</p>
+      </div>
+      <p class="credits">DESIGNED BY ALARA KALFAZADE<br />OCTOBER 2026</p>
+    </div>
+  </section>
 </body>
 </html>

@@ -1,5 +1,8 @@
 const DEBUG_MODE = false; // Set to true and reload to show debug visuals.
 
+let infoOpen = false;
+let hasCaptured = false;
+
 let video;
 let canvas;
 let isDrawing = false;
@@ -37,7 +40,13 @@ let strokeOrigin = { x: 0, y: 0 };
 let orientationDelta = { x: 0, y: 0 };
 let edgeOverflow = { x: 0, y: 0 };
 let orientationListening = false;
-let motionSession = 0;
+let trackingRequest = null;
+let shutterState = "IDLE";
+let activePointer = null;
+let pressStartedAt = 0;
+let pressStamped = false;
+let lockCenter = null;
+const TAP_WINDOW_MS = 180;
 let sensorTimer;
 let lastSensorAt = 0;
 
@@ -48,11 +57,12 @@ function setup() {
   canvas = createCanvas(host.clientWidth, host.clientHeight);
   canvas.parent(host);
   canvas.elt.setAttribute("aria-label", "Accumulated live camera fragments");
-  background(20);
+  background(0);
   imageMode(CENTER);
   angleMode(RADIANS);
 
-  document.getElementById("draw-toggle").addEventListener("click", toggleDrawing);
+  setupShutter();
+  setupInformation();
   document.getElementById("clear").addEventListener("click", resetCanvas);
   document.getElementById("save").addEventListener("click", () => {
     // Save this canvas's pixels, without redrawing or including the UI.
@@ -77,67 +87,156 @@ function setup() {
 }
 
 function setStatus(message) {
-  document.getElementById("status").textContent = message;
+  // Keep routine interaction hints out of the minimal UI; retain error/readiness messages.
+  const routine = ["Tap to capture · hold to draw", "Drawing locked. Tap STOP to finish."];
+  document.getElementById("status").textContent = routine.includes(message) ? "" : message;
 }
 
-async function toggleDrawing() {
-  if (isDrawing) {
-    pauseDrawing();
-    return;
-  }
-  isDrawing = true;
-  const session = ++motionSession;
+function setupInformation() {
+  document.getElementById("info-open").addEventListener("click", openInformation);
+  document.getElementById("info-close").addEventListener("click", closeInformation);
+  document.getElementById("info-panel").addEventListener("keydown", event => {
+    if (event.key === "Escape") { event.preventDefault(); closeInformation(); }
+    if (event.key === "Tab") {
+      // The close button is now the panel's only interactive element.
+      event.preventDefault();
+      document.getElementById("info-close").focus();
+    }
+  });
+}
+
+function openInformation() {
+  if (infoOpen) return;
+  infoOpen = true;
+  // A physical hold cannot survive a dialog; an existing lock is suspended intact.
+  if (shutterState === "PRESSING") pauseDrawing();
+  activePointer = null;
+  document.getElementById("info-panel").hidden = false;
+  document.getElementById("camera-controls").inert = true;
+  document.getElementById("info-open").setAttribute("aria-expanded", "true");
+  document.getElementById("info-close").focus();
+}
+
+function closeInformation() {
+  if (!infoOpen) return;
+  document.getElementById("info-panel").hidden = true;
+  document.getElementById("camera-controls").inert = false;
+  document.getElementById("info-open").setAttribute("aria-expanded", "false");
+  document.getElementById("info-open").focus();
+  infoOpen = false;
+}
+
+function setupShutter() {
+  const button = document.getElementById("shutter");
+  button.addEventListener("pointerdown", shutterDown);
+  button.addEventListener("pointermove", shutterMove);
+  button.addEventListener("pointerup", shutterUp);
+  button.addEventListener("pointercancel", shutterCancel);
+  button.addEventListener("lostpointercapture", shutterCancel);
+  button.addEventListener("contextmenu", event => event.preventDefault());
+  // Pointer events own physical gestures. Only synthetic/keyboard clicks use click.
+  button.addEventListener("click", event => {
+    event.preventDefault();
+    if (infoOpen || event.detail !== 0 || activePointer !== null) return;
+    if (shutterState === "LOCKED") pauseDrawing();
+    else if (canStamp()) stampCurrentFragment();
+    else { ensureTracking(); setStatus("Preparing camera and motion. Tap again when ready."); }
+  });
+  window.addEventListener("blur", pauseDrawing);
   updateDrawControl();
-  // Once tracking has begun, DRAW only switches stamping back on.
-  // Keep the live cursor, target, smoothing, and neutral pose intact.
-  if (orientationListening) {
-    setStatus("");
-    if (!video) startCamera();
+}
+
+function setShutterState(state) {
+  shutterState = state;
+  isDrawing = state !== "IDLE";
+  updateDrawControl();
+}
+
+function shutterDown(event) {
+  if (infoOpen || event.isPrimary === false || event.button !== 0 || activePointer !== null) return;
+  event.preventDefault();
+  if (shutterState === "LOCKED") { pauseDrawing(); return; }
+  if (!canStamp()) {
+    ensureTracking();
+    setStatus("Preparing camera and motion. Tap again when ready.");
     return;
   }
+  activePointer = event.pointerId;
+  pressStartedAt = performance.now();
+  pressStamped = false;
+  setShutterState("PRESSING");
+  const rect = document.getElementById("lock-indicator").getBoundingClientRect();
+  lockCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  event.currentTarget.setPointerCapture(event.pointerId);
+  // Immediate first fragment. Further frames wait only for tap disambiguation.
+  pressStamped = stampCurrentFragment();
+}
+
+function shutterMove(event) {
+  if (infoOpen || event.pointerId !== activePointer || shutterState !== "PRESSING") return;
+  event.preventDefault();
+  // Enter the visible lock target, not merely any point outside the shutter.
+  if (Math.abs(event.clientX - lockCenter.x) <= 32 &&
+      Math.abs(event.clientY - lockCenter.y) <= 28) {
+    setShutterState("LOCKED");
+    setStatus("Drawing locked. Tap STOP to finish.");
+  }
+}
+
+function finishPointer(event) {
+  if (event.pointerId !== activePointer) return;
+  event.preventDefault();
+  activePointer = null;
+  if (shutterState !== "LOCKED") pauseDrawing();
+  if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+}
+function shutterUp(event) { finishPointer(event); }
+function shutterCancel(event) { finishPointer(event); }
+
+function ensureTracking() {
+  if (orientationListening) {
+    if (!video) startCamera();
+    return Promise.resolve();
+  }
+  if (trackingRequest) return trackingRequest;
+  trackingRequest = initializeTracking().finally(() => { trackingRequest = null; });
+  return trackingRequest;
+}
+
+async function initializeTracking() {
   recalibrateMotion();
   try {
     if (!window.isSecureContext) throw new Error("Open the secure HTTPS preview to use camera and motion.");
     if (!window.DeviceOrientationEvent) throw new Error("This browser does not provide phone orientation data.");
-    // Invoke directly in the DRAW click's user activation (required on iOS).
     const orientationPermission = typeof window.DeviceOrientationEvent.requestPermission === "function"
       ? window.DeviceOrientationEvent.requestPermission() : Promise.resolve("granted");
-    // Request both before awaiting, while the DRAW tap still has user activation.
     const motionPermission = requestSizingPermission();
     const [permission, sizingPermission] = await Promise.all([orientationPermission, motionPermission]);
-    if (session !== motionSession || !isDrawing) return;
-    if (permission !== "granted") throw new Error("Motion access denied. Allow motion in website settings, then tap DRAW.");
-    if (!orientationListening) {
-      window.addEventListener("deviceorientation", handleOrientation);
-      orientationListening = true;
-    }
+    if (permission !== "granted") throw new Error("Motion access denied. Allow motion in website settings, then tap the shutter.");
+    window.addEventListener("deviceorientation", handleOrientation);
+    orientationListening = true;
     if (sizingPermission === "granted") {
       window.addEventListener("devicemotion", handleDeviceMotion);
       motionSource = "waiting for accelerometer";
     }
     setStatus("Hold your starting pose while the camera and motion become ready.");
     if (!video) startCamera();
-    if (!isDrawing) return;
     clearTimeout(sensorTimer);
     sensorTimer = setTimeout(() => {
-      if (session === motionSession && isDrawing && !neutralOrientation) {
-        pauseDrawing();
-        setStatus("No orientation data received. Check motion permissions and tap DRAW to retry.");
-      }
+      if (!neutralOrientation) setStatus("No orientation data received. Check motion permissions.");
     }, 5000);
   } catch (error) {
-    if (session !== motionSession) return;
     pauseDrawing();
     setStatus(error.message);
   }
 }
 
 function pauseDrawing() {
-  isDrawing = false;
-  motionSession++;
-  clearTimeout(sensorTimer);
-  updateDrawControl();
-  setStatus("Paused — your canvas is preserved.");
+  activePointer = null;
+  setShutterState("IDLE");
+  setStatus("Tap to capture · hold to draw");
 }
 
 function recalibrateMotion() {
@@ -225,7 +324,7 @@ function handleOrientation(event) {
   strokeOrigin.x -= edgeOverflow.x;
   strokeOrigin.y -= edgeOverflow.y;
   updatePhoneRoll(current, screenAngle);
-  if (isDrawing && !cameraStarting) setStatus("");
+  if (isDrawing && !cameraStarting && shutterState !== "LOCKED") setStatus("");
 }
 
 function updateMotionCursor() {
@@ -308,21 +407,25 @@ function fragmentSize() {
 function updateDebug() {
   if (!debugEnabled || !debugPanel) return;
   const number = value => Number.isFinite(value) ? value.toFixed(1) : "—";
-  debugPanel.textContent = `RAW ORIENTATION\nα ${number(rawOrientation?.alpha)}  β ${number(rawOrientation?.beta)}  γ ${number(rawOrientation?.gamma)}\nHEADING α ${number(rawOrientation?.alpha)}° / VERTICAL β ${number(rawOrientation?.beta)}°\nROLL RAW ${number(rawRoll)}° / NEUTRAL ${number(neutralRoll)}°\nROLL RELATIVE ${number(relativeRoll)}°\nRELATIVE TILT ${number(orientationDelta.x)} / ${number(orientationDelta.y)}°\nTARGET ${number(target.x)} / ${number(target.y)}\nDISCARDED OVERFLOW ${number(edgeOverflow.x)} / ${number(edgeOverflow.y)} px\nSMOOTHED / FINAL CURSOR\nx ${number(cursor.x)}  y ${number(cursor.y)}\nROTATION ${number(angle * 180 / Math.PI)}°\nCAMERA ${video?.elt.videoWidth || 0} × ${video?.elt.videoHeight || 0}\nMOTION RAW ${number(rawMotionIntensity)} m/s²\nMOTION SMOOTH ${number(smoothedMotionIntensity)} m/s²\nFRAGMENT ${number(fragmentSize())} × ${number(fragmentSize() * 0.75)} px\n${lastMotionAt !== null && performance.now() - lastMotionAt >= 1500 ? "motion stale — default size" : motionSource}\nHide: set DEBUG_MODE = false\n${isDrawing ? (neutralOrientation ? "DRAW" : "CALIBRATING") : "PAUSED"}`;
+  debugPanel.textContent = `RAW ORIENTATION\nα ${number(rawOrientation?.alpha)}  β ${number(rawOrientation?.beta)}  γ ${number(rawOrientation?.gamma)}\nHEADING α ${number(rawOrientation?.alpha)}° / VERTICAL β ${number(rawOrientation?.beta)}°\nROLL RAW ${number(rawRoll)}° / NEUTRAL ${number(neutralRoll)}°\nROLL RELATIVE ${number(relativeRoll)}°\nRELATIVE TILT ${number(orientationDelta.x)} / ${number(orientationDelta.y)}°\nTARGET ${number(target.x)} / ${number(target.y)}\nDISCARDED OVERFLOW ${number(edgeOverflow.x)} / ${number(edgeOverflow.y)} px\nSMOOTHED / FINAL CURSOR\nx ${number(cursor.x)}  y ${number(cursor.y)}\nROTATION ${number(angle * 180 / Math.PI)}°\nCAMERA ${video?.elt.videoWidth || 0} × ${video?.elt.videoHeight || 0}\nMOTION RAW ${number(rawMotionIntensity)} m/s²\nMOTION SMOOTH ${number(smoothedMotionIntensity)} m/s²\nFRAGMENT ${number(fragmentSize())} × ${number(fragmentSize() * 0.75)} px\n${lastMotionAt !== null && performance.now() - lastMotionAt >= 1500 ? "motion stale — default size" : motionSource}\nHide: set DEBUG_MODE = false\n${shutterState}`;
   debugCursor.style.left = `${cursor.x}px`;
   debugCursor.style.top = `${cursor.y}px`;
 }
 
 function updateDrawControl() {
-  const button = document.getElementById("draw-toggle");
-  button.textContent = isDrawing ? "PAUSE" : "DRAW";
+  const button = document.getElementById("shutter");
+  button.dataset.state = shutterState;
+  button.setAttribute("aria-label", shutterState === "LOCKED" ? "Stop drawing" : "Capture fragment; hold to draw, slide up to lock");
   button.setAttribute("aria-pressed", String(isDrawing));
+  const indicator = document.getElementById("lock-indicator");
+  indicator.dataset.state = shutterState;
+  document.getElementById("lock-icon").textContent = shutterState === "LOCKED" ? "lock" : "lock_open";
+  document.getElementById("shutter-label").textContent = shutterState === "LOCKED" ? "STOP" : "";
 }
 
 function startCamera() {
   if (!navigator.mediaDevices || !window.isSecureContext) {
-    isDrawing = false;
-    updateDrawControl();
+    pauseDrawing();
     setStatus("Open Footage over HTTPS or localhost to use the camera.");
     return;
   }
@@ -338,7 +441,7 @@ function startCamera() {
   }, () => {
     clearTimeout(cameraTimer);
     cameraStarting = false;
-    setStatus(isDrawing ? "" : "Paused — your canvas is preserved.");
+    setStatus("Tap to capture · hold to draw");
   });
   video.elt.setAttribute("playsinline", "");
   video.elt.muted = true;
@@ -352,7 +455,7 @@ function startCamera() {
 }
 
 function resetCanvas() {
-  background(20);
+  background(0);
   // Clearing preserves DRAW / PAUSE state.
 }
 
@@ -360,11 +463,25 @@ function draw() {
   if (neutralOrientation) updateMotionCursor();
   updateFragmentSize();
   updateDebug();
-  if (!isDrawing || !neutralOrientation || performance.now() - lastSensorAt > 1000 ||
-      !video || video.elt.readyState < 2 || !video.elt.videoWidth) return;
-  // No background redraw or fade: every stamp stays until explicitly cleared.
-  const baseSize = fragmentSize();
-  stampVideo(cursor.x, cursor.y, baseSize);
+  if (!isDrawing) return;
+  if (shutterState === "PRESSING" && pressStamped &&
+      performance.now() - pressStartedAt < TAP_WINDOW_MS) return;
+  if (stampCurrentFragment()) pressStamped = true;
+}
+
+function canStamp() {
+  return Boolean(!infoOpen && neutralOrientation && performance.now() - lastSensorAt <= 1000 &&
+    video && video.elt.readyState >= 2 && video.elt.videoWidth);
+}
+
+function stampCurrentFragment() {
+  if (!canStamp()) return false;
+  stampVideo(cursor.x, cursor.y, fragmentSize());
+  if (!hasCaptured) {
+    hasCaptured = true;
+    document.getElementById("intro").classList.add("dismissed");
+  }
+  return true;
 }
 
 function stampVideo(x, y, baseSize) {
@@ -407,7 +524,7 @@ function windowResized() {
   strokeOrigin.x *= nextW / width;
   strokeOrigin.y *= nextH / height;
   resizeCanvas(nextW, nextH, true);
-  background(20);
+  background(0);
   // Fit the complete existing artwork into the new viewport without cropping.
   image(previous, width / 2, height / 2, previous.width * fit, previous.height * fit);
 }

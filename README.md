@@ -4,13 +4,19 @@ A mobile p5.js canvas that stamps live rear-camera fragments using relative phon
 
 ## Phone testing
 
-Use your working VS Code HTTPS forwarded address. Open it directly in Safari or Chrome on the phone. Tap DRAW and allow camera and motion access when prompted. Hold your starting pose until the permissions finish and the first orientation reading arrives.
+Use your working VS Code HTTPS forwarded address. Open it directly in Safari or Chrome on the phone. The first shutter interaction enables the camera and motion sensors; allow access and hold your starting pose while they initialize. Tap again when ready. Nothing is queued behind permission dialogs.
 
-The first DRAW starts at the canvas center and records the neutral pose. Tilt left/right or up/down relative to that pose to move the invisible brush. PAUSE stops only camera stamping: the cursor, tilt rotation, and smoothing remain active. DRAW resumes at the current cursor position without recalibrating, leaving a gap where you moved while paused. The debug cursor remains visible during PAUSE. Rotating between portrait and landscape still recalibrates. Returning from a backgrounded page requires DRAW again.
+- Tap: one fragment immediately on touch-down, with the current position, size, and roll.
+- Hold: keep pressing for a continuous trail; release stops stamping.
+- Hold and slide upward into the lock indicator: locks the trail hands-free. Release keeps it running; tap the red shutter with the closed-lock indicator to stop.
 
-CLEAR / RESTART clears the artwork while retaining the draw/pause state. SAVE IMAGE exports the canvas pixels as PNG, without controls or debugging overlays.
+The first stamp is immediate. A 180ms tap-disambiguation window suppresses additional stamps so a quick tap produces exactly one; subsequent frames stamp continuously for a hold. This is the timing compromise required to distinguish a tap from a hold without undoing canvas pixels. Locking bypasses that window.
 
-This version uses orientation, not acceleration-based position tracking: moving the phone sideways without changing its angle does not move the brush.
+Cursor, roll, and size keep updating when idle. Shutter gestures never recalibrate motion. Pointer capture handles releases outside the button, ignores secondary fingers, and stops cancelled holds while retaining a completed lock. Backgrounding the page or losing window focus stops drawing, including locked drawing.
+
+CLEAR / RESTART clears the canvas while retaining interaction state. SAVE IMAGE exports the canvas pixels as PNG without controls or debugging overlays. Screen resizing and portrait/landscape handling remain unchanged.
+
+Test on iPhone Safari: permission prompts, quick taps, long holds, sliding into or missing the lock target, release outside the shutter, cancellation, and STOP after locking. Automated sensor and gesture tests do not replace physical touch testing.
 
 ## Development debug
 
@@ -50,3 +56,12 @@ Cursor aiming retains the existing relative screen-normal mapping and edge handl
 The first valid roll reading establishes neutral. Relative roll uses the shortest angular difference, is limited to ±45°, and has its own 90ms smoothing. Left lean rotates counterclockwise; right lean rotates clockwise. Pause continues tracking and smoothing roll, and resume retains neutral and current rotation. The existing screen-orientation change calibration also resets roll. Near a horizontal/flat phone pose, upright roll is undefined, so the last valid rotation is held until it can be measured again.
 
 Debug shows raw alpha/beta/gamma, heading/vertical values, derived raw roll, neutral roll, relative roll, smoothed rotation, and cursor state. Tests cover aim/roll separation, both roll signs, screen orientation, neutral offset, angle wrap, bounds, paused roll tracking, and resume without recalibration. Validate the physical feel on the target phone.
+
+
+## Reference UI
+
+The UI uses Intel One Mono (400/500) and Google Material Symbols served through Google Fonts. The canvas and clear color are pure black. Save is left of the shutter; clear is right. A red circular shutter and closed lock match the locked reference; its accessible label identifies it as Stop drawing.
+
+The opening instruction fades over 500ms after the first successful stamp and stays hidden until reload, including after clear. Camera/permission errors can still appear separately. The information panel has a black fill, white rectangular border, and internal scrolling for the full supplied text and credits. Opening it blocks stamps and shutter gestures while preserving motion. An existing lock resumes after closing; a physical press is ended rather than resumed without a finger. DEBUG_MODE remains false.
+
+UI regressions cover one-time instruction dismissal, pure-black clear, and modal suspension without cursor recalibration. Font CSS availability was verified. The desktop browser automation tool failed to start in this environment, so visual comparison and phone touch testing remain manual.

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 function sketch(permission = async () => 'granted', debug = false) {
-  const elements = { 'draw-toggle': { setAttribute() {} }, status: {} };
+  const elements = { shutter: { dataset: {}, setAttribute() {} }, 'lock-indicator': { dataset: {}, getBoundingClientRect: () => ({left: 136, top: 500, width: 128, height: 48}) }, 'shutter-label': {}, 'lock-icon': {}, intro: { classList: { add() {} } }, 'info-panel': {}, 'camera-controls': {}, 'info-open': {setAttribute() {}, focus() {}}, 'info-close': {focus() {}}, status: {} };
   const ctx = {
     URLSearchParams, Math, Number, String, performance: { now: () => 100 },
     window: { location: { search: '' }, isSecureContext: true,
@@ -18,6 +18,11 @@ function sketch(permission = async () => 'granted', debug = false) {
   vm.runInContext(debug ? source.replace('const DEBUG_MODE = false;', 'const DEBUG_MODE = true;') : source, ctx);
   vm.runInContext('video = { elt: { readyState: 2, videoWidth: 720 } }; cursor = { x: 200, y: 400 }; target = { ...cursor };', ctx);
   ctx.read = expression => vm.runInContext(expression, ctx);
+  ctx.elements = elements;
+  ctx.toggleDrawing = async () => {
+    await ctx.ensureTracking();
+    if (ctx.read('orientationListening')) ctx.setShutterState('LOCKED');
+  };
   return ctx;
 }
 const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8, `${actual} != ${expected}`);
@@ -52,7 +57,7 @@ test('paused cursor keeps moving without stamps; resume preserves calibration an
   assert.equal(stamps.length, count);
   assert.ok(s.read('cursor.x > 200'));
   assert.equal(s.read('debugCursor.style.left'), `${s.read('cursor.x')}px`);
-  assert.match(s.read('debugPanel.textContent'), /PAUSED/);
+  assert.match(s.read('debugPanel.textContent'), /IDLE/);
   const currentX = s.read('cursor.x');
   const currentAngle = s.read('angle');
   const currentTarget = s.read('target.x');
@@ -75,15 +80,15 @@ test('null readings do not calibrate and extreme tilt is bounded', async () => {
   s.handleOrientation({ alpha: 0, beta: 0, gamma: 80 });
   near(s.read('target.x'), 0);
 });
-test('permission denial and pausing during permission request do not start drawing', async () => {
+test('permission denial and released initialization do not start drawing', async () => {
   const denied = sketch(async () => 'denied'); await denied.toggleDrawing();
   assert.equal(denied.read('isDrawing'), false);
   let resolve;
   const delayed = sketch(() => new Promise(done => { resolve = done; }));
-  const pending = delayed.toggleDrawing();
+  const pending = delayed.ensureTracking();
   delayed.pauseDrawing(); resolve('granted'); await pending;
   assert.equal(delayed.read('isDrawing'), false);
-  assert.equal(delayed.read('orientationListening'), false);
+  assert.equal(delayed.read('orientationListening'), true);
 });
 
 test('upright heading and pitch move the cursor without rotating the fragment', async () => {
@@ -283,4 +288,88 @@ test('size sensor updates cannot mutate cursor, calibration, or edge mapping', a
   }
   assert.equal(snapshot(), before);
   assert.ok(s.read('sizeScale') < 1);
+});
+
+async function shutterSketch() {
+  const s = sketch(); let now = 100; const stamps = [];
+  s.performance.now = () => now;
+  await s.ensureTracking();
+  s.handleOrientation({alpha: 0, beta: 90, gamma: 0});
+  s.stampVideo = (x, y, size) => stamps.push({x, y, size});
+  const button = {setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}};
+  const event = (extra = {}) => ({pointerId: 1, button: 0, isPrimary: true,
+    clientX: 200, clientY: 620, currentTarget: button, preventDefault() {}, ...extra});
+  return {s, stamps, event, time: value => { now = value; }};
+}
+
+test('tap stamps immediately exactly once, and release does not stamp again', async () => {
+  const {s, stamps, event, time} = await shutterSketch();
+  s.shutterDown(event()); assert.equal(stamps.length, 1);
+  time(150); for (let i = 0; i < 10; i++) s.draw();
+  s.shutterUp(event()); time(400); s.draw();
+  assert.equal(stamps.length, 1); assert.equal(s.read('shutterState'), 'IDLE');
+});
+
+test('hold draws continuously after initial stamp and stops on release outside', async () => {
+  const {s, stamps, event, time} = await shutterSketch();
+  s.shutterDown(event()); time(300); s.draw(); s.draw();
+  assert.equal(stamps.length, 3);
+  s.shutterMove(event({clientX: 0, clientY: 520}));
+  assert.equal(s.read('shutterState'), 'PRESSING');
+  s.shutterUp(event({clientX: 0, clientY: 520})); s.draw();
+  assert.equal(stamps.length, 3);
+});
+
+test('lock survives release and cancellation; STOP does not stamp', async () => {
+  const {s, stamps, event} = await shutterSketch();
+  s.shutterDown(event());
+  s.shutterMove(event({clientY: 524}));
+  assert.equal(s.read('shutterState'), 'LOCKED');
+  s.shutterCancel(event()); s.draw();
+  assert.equal(stamps.length, 2);
+  s.shutterDown(event()); s.shutterUp(event()); s.draw();
+  assert.equal(stamps.length, 2);
+  assert.equal(s.read('shutterState'), 'IDLE');
+});
+
+test('secondary pointer cannot stamp, unlock, or interrupt active press; cancel stops hold', async () => {
+  const {s, stamps, event, time} = await shutterSketch();
+  s.shutterDown(event());
+  s.shutterDown(event({pointerId: 2, isPrimary: false}));
+  s.shutterMove(event({pointerId: 2, clientY: 524}));
+  s.shutterUp(event({pointerId: 2}));
+  assert.equal(stamps.length, 1); assert.equal(s.read('shutterState'), 'PRESSING');
+  s.shutterCancel(event()); time(400); s.draw();
+  assert.equal(stamps.length, 1); assert.equal(s.read('shutterState'), 'IDLE');
+});
+
+
+test('information panel suspends locked stamps and interactions without resetting motion', async () => {
+  const {s, stamps, event} = await shutterSketch();
+  s.shutterDown(event()); s.shutterMove(event({clientY: 524})); s.shutterUp(event());
+  assert.equal(s.read('shutterState'), 'LOCKED');
+  const neutral = s.read('neutralOrientation');
+  s.openInformation();
+  const count = stamps.length;
+  s.handleOrientation({alpha: 15, beta: 90, gamma: 0});
+  for (let i = 0; i < 20; i++) s.draw();
+  s.shutterDown(event());
+  assert.equal(stamps.length, count);
+  assert.equal(s.read('shutterState'), 'LOCKED');
+  assert.ok(s.read('cursor.x < 200'));
+  assert.equal(s.elements['camera-controls'].inert, true);
+  s.closeInformation(); s.draw();
+  assert.equal(stamps.length, count + 1);
+  assert.equal(s.read('neutralOrientation'), neutral);
+});
+
+test('intro fades only on first successful stamp and stays hidden after clear', async () => {
+  const {s, event} = await shutterSketch(); let fades = 0;
+  s.elements.intro.classList.add = value => { assert.equal(value, 'dismissed'); fades++; };
+  s.openInformation(); assert.equal(s.stampCurrentFragment(), false);
+  assert.equal(fades, 0); s.closeInformation();
+  s.shutterDown(event()); s.shutterUp(event()); assert.equal(fades, 1);
+  s.background = value => assert.equal(value, 0);
+  s.resetCanvas(); s.shutterDown(event()); s.shutterUp(event());
+  assert.equal(fades, 1);
 });

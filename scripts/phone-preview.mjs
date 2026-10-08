@@ -7,6 +7,7 @@ const root = new URL('../', import.meta.url);
 const files = new Map([
   ['/', ['index.html', 'text/html']],
   ['/index.html', ['index.html', 'text/html']],
+  ['/device-mode.js', ['device-mode.js', 'text/javascript']],
   ['/style.css', ['style.css', 'text/css']],
   ['/mySketch2.js', ['mySketch2.js', 'text/javascript']]
 ]);

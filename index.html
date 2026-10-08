@@ -9,11 +9,20 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Intel+One+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=block" rel="stylesheet" />
+  <script src="device-mode.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.js"></script>
   <link rel="stylesheet" href="style.css" />
   <script src="mySketch2.js" defer></script>
 </head>
 <body>
+  <section id="desktop-landing" aria-labelledby="desktop-message">
+    <div class="desktop-title">FOOTAGE</div>
+    <div class="desktop-message">
+      <h1 id="desktop-message">Oops, FOOTAGE requires footwork</h1>
+      <p>FOOTAGE is designed for your phone. Open this website on your mobile device to start drawing with movement.</p>
+    </div>
+  </section>
+  <div id="mobile-experience">
   <main id="canvas-host" aria-label="Footage camera canvas"></main>
   <header>
     <h1>FOOTAGE</h1>
@@ -42,5 +51,6 @@
       <p class="credits">DESIGNED BY ALARA KALFAZADE<br />OCTOBER 2026</p>
     </div>
   </section>
+  </div>
 </body>
 </html>

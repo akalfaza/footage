@@ -51,6 +51,11 @@ let sensorTimer;
 let lastSensorAt = 0;
 
 function setup() {
+  if (window.footageMobile === false) {
+    noCanvas();
+    noLoop();
+    return;
+  }
   const host = document.getElementById("canvas-host");
   // Match the phone display instead of stretching a 1x canvas on Retina screens.
   pixelDensity(window.devicePixelRatio || 1);
@@ -460,6 +465,7 @@ function resetCanvas() {
 }
 
 function draw() {
+  if (window.footageMobile === false) return;
   if (neutralOrientation) updateMotionCursor();
   updateFragmentSize();
   updateDebug();
